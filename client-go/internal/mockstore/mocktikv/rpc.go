@@ -439,10 +439,8 @@ func (h kvHandler) handleKvRawGet(req *kvrpcpb.RawGetRequest) *kvrpcpb.RawGetRes
 			Error: "not implemented",
 		}
 	}
-	v := rawKV.RawGet(req.Cf, req.GetKey())
 	return &kvrpcpb.RawGetResponse{
-		NotFound: v == nil,
-		Value:    v,
+		Value: rawKV.RawGet(req.Cf, req.GetKey()),
 	}
 }
 
@@ -595,48 +593,6 @@ func (h kvHandler) handleKvRawScan(req *kvrpcpb.RawScanRequest) *kvrpcpb.RawScan
 
 	return &kvrpcpb.RawScanResponse{
 		Kvs: convertToPbPairs(pairs),
-	}
-}
-
-func (h kvHandler) handleKvRawChecksum(req *kvrpcpb.RawChecksumRequest) *kvrpcpb.RawChecksumResponse {
-	rawKV, ok := h.mvccStore.(RawKV)
-	if !ok {
-		errStr := "not implemented"
-		return &kvrpcpb.RawChecksumResponse{
-			RegionError: &errorpb.Error{
-				Message: errStr,
-			},
-		}
-	}
-
-	crc64Xor := uint64(0)
-	totalKvs := uint64(0)
-	totalBytes := uint64(0)
-	for _, r := range req.Ranges {
-		upperBound := h.endKey
-		if len(r.EndKey) > 0 && (len(upperBound) == 0 || bytes.Compare(r.EndKey, upperBound) < 0) {
-			upperBound = r.EndKey
-		}
-		rangeCrc64Xor, rangeKvs, rangeBytes, err := rawKV.RawChecksum(
-			"CF_DEFAULT",
-			r.StartKey,
-			upperBound,
-		)
-		if err != nil {
-			return &kvrpcpb.RawChecksumResponse{
-				RegionError: &errorpb.Error{
-					Message: err.Error(),
-				},
-			}
-		}
-		crc64Xor ^= rangeCrc64Xor
-		totalKvs += rangeKvs
-		totalBytes += rangeBytes
-	}
-	return &kvrpcpb.RawChecksumResponse{
-		Checksum:   crc64Xor,
-		TotalKvs:   totalKvs,
-		TotalBytes: totalBytes,
 	}
 }
 
@@ -977,13 +933,6 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			return resp, nil
 		}
 		resp.Resp = kvHandler{session}.HandleKvRawCompareAndSwap(r)
-	case tikvrpc.CmdRawChecksum:
-		r := req.RawChecksum()
-		if err := session.checkRequest(reqCtx, r.Size()); err != nil {
-			resp.Resp = &kvrpcpb.RawScanResponse{RegionError: err}
-			return resp, nil
-		}
-		resp.Resp = kvHandler{session}.handleKvRawChecksum(r)
 	case tikvrpc.CmdUnsafeDestroyRange:
 		panic("unimplemented")
 	case tikvrpc.CmdRegisterLockObserver:

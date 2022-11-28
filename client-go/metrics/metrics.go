@@ -44,9 +44,6 @@ var (
 	TiKVTxnCmdHistogram                      *prometheus.HistogramVec
 	TiKVBackoffHistogram                     *prometheus.HistogramVec
 	TiKVSendReqHistogram                     *prometheus.HistogramVec
-	TiKVSendReqCounter                       *prometheus.CounterVec
-	TiKVSendReqTimeCounter                   *prometheus.CounterVec
-	TiKVRPCNetLatencyHistogram               *prometheus.HistogramVec
 	TiKVCoprocessorHistogram                 *prometheus.HistogramVec
 	TiKVLockResolverCounter                  *prometheus.CounterVec
 	TiKVRegionErrorCounter                   *prometheus.CounterVec
@@ -115,7 +112,6 @@ const (
 	LblFromStore       = "from_store"
 	LblToStore         = "to_store"
 	LblStaleRead       = "stale_read"
-	LblSource          = "source"
 )
 
 func initMetrics(namespace, subsystem string) {
@@ -145,31 +141,6 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Bucketed histogram of sending request duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 29), // 0.5ms ~ 1.5days
 		}, []string{LblType, LblStore, LblStaleRead})
-
-	TiKVSendReqCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "request_counter",
-			Help:      "Counter of sending request with multi dimensions.",
-		}, []string{LblType, LblStore, LblStaleRead, LblSource})
-
-	TiKVSendReqTimeCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "request_time_counter",
-			Help:      "Counter of request time with multi dimensions.",
-		}, []string{LblType, LblStore, LblStaleRead, LblSource})
-
-	TiKVRPCNetLatencyHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "rpc_net_latency_seconds",
-			Help:      "Bucketed histogram of time difference between TiDB and TiKV.",
-			Buckets:   prometheus.ExponentialBuckets(5e-5, 2, 18), // 50us ~ 6.5s
-		}, []string{LblStore})
 
 	TiKVCoprocessorHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -607,9 +578,6 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnCmdHistogram)
 	prometheus.MustRegister(TiKVBackoffHistogram)
 	prometheus.MustRegister(TiKVSendReqHistogram)
-	prometheus.MustRegister(TiKVSendReqCounter)
-	prometheus.MustRegister(TiKVSendReqTimeCounter)
-	prometheus.MustRegister(TiKVRPCNetLatencyHistogram)
 	prometheus.MustRegister(TiKVCoprocessorHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
 	prometheus.MustRegister(TiKVRegionErrorCounter)

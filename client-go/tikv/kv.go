@@ -250,8 +250,8 @@ func (s *KVStore) runSafePointChecker() {
 }
 
 // Begin a global transaction.
-func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
-	options := &transaction.TxnOptions{}
+func (s *KVStore) Begin(opts ...TxnOption) (*transaction.KVTxn, error) {
+	options := &txnOptions{}
 	// Inject the options
 	for _, opt := range opts {
 		opt(options)
@@ -260,21 +260,18 @@ func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 	if options.TxnScope == "" {
 		options.TxnScope = oracle.GlobalTxnScope
 	}
-	var (
-		startTS uint64
-	)
 	if options.StartTS != nil {
-		startTS = *options.StartTS
-	} else {
-		bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
-		startTS, err = s.getTimestampWithRetry(bo, options.TxnScope)
-		if err != nil {
-			return nil, err
-		}
+		snapshot := txnsnapshot.NewTiKVSnapshot(s, *options.StartTS, s.nextReplicaReadSeed())
+		return transaction.NewTiKVTxn(s, snapshot, *options.StartTS, options.TxnScope)
 	}
 
+	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
+	startTS, err := s.getTimestampWithRetry(bo, options.TxnScope)
+	if err != nil {
+		return nil, err
+	}
 	snapshot := txnsnapshot.NewTiKVSnapshot(s, startTS, s.nextReplicaReadSeed())
-	return transaction.NewTiKVTxn(s, snapshot, startTS, options)
+	return transaction.NewTiKVTxn(s, snapshot, startTS, options.TxnScope)
 }
 
 // DeleteRange delete all versions of all keys in the range[startKey,endKey) immediately.
@@ -482,12 +479,12 @@ func (s *KVStore) GetClusterID() uint64 {
 	return s.clusterID
 }
 
-func (s *KVStore) getSafeTS(storeID uint64) (bool, uint64) {
+func (s *KVStore) getSafeTS(storeID uint64) uint64 {
 	safeTS, ok := s.safeTSMap.Load(storeID)
 	if !ok {
-		return false, 0
+		return 0
 	}
-	return true, safeTS.(uint64)
+	return safeTS.(uint64)
 }
 
 // setSafeTS sets safeTs for store storeID, export for testing
@@ -506,13 +503,9 @@ func (s *KVStore) getMinSafeTSByStores(stores []*locate.Store) uint64 {
 		return 0
 	}
 	for _, store := range stores {
-		ok, safeTS := s.getSafeTS(store.StoreID())
-		if ok {
-			if safeTS != 0 && safeTS < minSafeTS {
-				minSafeTS = safeTS
-			}
-		} else {
-			minSafeTS = 0
+		safeTS := s.getSafeTS(store.StoreID())
+		if safeTS < minSafeTS {
+			minSafeTS = safeTS
 		}
 	}
 	return minSafeTS
@@ -523,7 +516,6 @@ func (s *KVStore) safeTSUpdater() {
 	t := time.NewTicker(time.Second * 2)
 	defer t.Stop()
 	ctx, cancel := context.WithCancel(s.ctx)
-	ctx = util.WithInternalSourceType(ctx, util.InternalTxnGC)
 	defer cancel()
 	for {
 		select {
@@ -548,9 +540,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 			resp, err := tikvClient.SendRequest(ctx, storeAddr, tikvrpc.NewRequest(tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{KeyRange: &kvrpcpb.KeyRange{
 				StartKey: []byte(""),
 				EndKey:   []byte(""),
-			}}, kvrpcpb.Context{
-				RequestSource: util.RequestSourceFromCtx(ctx),
-			}), client.ReadTimeoutShort)
+			}}), client.ReadTimeoutShort)
 			storeIDStr := strconv.Itoa(int(storeID))
 			if err != nil {
 				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("fail", storeIDStr).Inc()
@@ -558,7 +548,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 				return
 			}
 			safeTS := resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
-			_, preSafeTS := s.getSafeTS(storeID)
+			preSafeTS := s.getSafeTS(storeID)
 			if preSafeTS > safeTS {
 				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", storeIDStr).Inc()
 				preSafeTSTime := oracle.GetTimeFromTS(preSafeTS)
@@ -612,19 +602,26 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 	return s.lockResolver, nil
 }
 
+// txnOptions indicates the option when beginning a transaction.
+// txnOptions are set by the TxnOption values passed to Begin
+type txnOptions struct {
+	TxnScope string
+	StartTS  *uint64
+}
+
 // TxnOption configures Transaction
-type TxnOption func(*transaction.TxnOptions)
+type TxnOption func(*txnOptions)
 
 // WithTxnScope sets the TxnScope to txnScope
 func WithTxnScope(txnScope string) TxnOption {
-	return func(st *transaction.TxnOptions) {
+	return func(st *txnOptions) {
 		st.TxnScope = txnScope
 	}
 }
 
 // WithStartTS sets the StartTS to startTS
 func WithStartTS(startTS uint64) TxnOption {
-	return func(st *transaction.TxnOptions) {
+	return func(st *txnOptions) {
 		st.StartTS = &startTS
 	}
 }

@@ -53,8 +53,6 @@ func TestCompatibleParseGCTime(t *testing.T) {
 		"20181218-19:53:37 +0800",
 		"20181218-19:53:37 +0800 ",
 		"20181218-11:53:37 +0000",
-		"20181218-11:53:37.000 +0000",
-		"20181218-19:53:37.000 +0800 +08",
 	}
 
 	invalidValues := []string{
@@ -69,7 +67,7 @@ func TestCompatibleParseGCTime(t *testing.T) {
 	}
 
 	expectedTime := time.Date(2018, 12, 18, 11, 53, 37, 0, time.UTC)
-	expectedTimeFormatted := "20181218-19:53:37.000 +0800"
+	expectedTimeFormatted := "20181218-19:53:37 +0800"
 
 	beijing, err := time.LoadLocation("Asia/Shanghai")
 	require.Nil(err)
@@ -84,7 +82,7 @@ func TestCompatibleParseGCTime(t *testing.T) {
 	}
 
 	for _, value := range invalidValues {
-		_, err = CompatibleParseGCTime(value)
+		_, err := CompatibleParseGCTime(value)
 		assert.NotNil(err)
 	}
 }

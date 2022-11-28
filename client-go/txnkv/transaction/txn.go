@@ -63,7 +63,6 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
-	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -76,13 +75,6 @@ type SchemaAmender interface {
 	// AmendTxn is the amend entry, new mutations will be generated based on input mutations using schema change info.
 	// The returned results are mutations need to prewrite and mutations need to cleanup.
 	AmendTxn(ctx context.Context, startInfoSchema SchemaVer, change *RelatedSchemaChange, mutations CommitterMutations) (CommitterMutations, error)
-}
-
-// TxnOptions indicates the option when beginning a transaction.
-// TxnOptions are set by the TxnOption values passed to Begin
-type TxnOptions struct {
-	TxnScope string
-	StartTS  *uint64
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -121,16 +113,14 @@ type KVTxn struct {
 	resourceGroupTag        []byte
 	resourceGroupTagger     tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
 	diskFullOpt             kvrpcpb.DiskFullOpt
-	txnSource               uint64
 	commitTSUpperBoundCheck func(uint64) bool
 	// interceptor is used to decorate the RPC request logic related to the txn.
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
-	*util.RequestSource
 }
 
 // NewTiKVTxn creates a new KVTxn.
-func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
+func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, scope string) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
@@ -140,17 +130,16 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		startTime:         time.Now(),
 		valid:             true,
 		vars:              tikv.DefaultVars,
-		scope:             options.TxnScope,
+		scope:             scope,
 		enableAsyncCommit: cfg.EnableAsyncCommit,
 		enable1PC:         cfg.Enable1PC,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
-		RequestSource:     snapshot.RequestSource,
 	}
 	return newTiKVTxn, nil
 }
 
 // SetSuccess is used to probe if kv variables are set or not. It is ONLY used in test cases.
-var SetSuccess = *atomicutil.NewBool(false)
+var SetSuccess = false
 
 // SetVars sets variables to the transaction.
 func (txn *KVTxn) SetVars(vars *tikv.Variables) {
@@ -158,7 +147,7 @@ func (txn *KVTxn) SetVars(vars *tikv.Variables) {
 	txn.snapshot.SetVars(vars)
 	if val, err := util.EvalFailpoint("probeSetVars"); err == nil {
 		if val.(bool) {
-			SetSuccess.Store(true)
+			SetSuccess = true
 		}
 	}
 }
@@ -327,11 +316,6 @@ func (txn *KVTxn) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 	txn.diskFullOpt = level
 }
 
-// SetTxnSource sets the source of the transaction.
-func (txn *KVTxn) SetTxnSource(txnSource uint64) {
-	txn.txnSource = txnSource
-}
-
 // GetDiskFullOpt gets the options of current operation in each TiKV disk usage level.
 func (txn *KVTxn) GetDiskFullOpt() kvrpcpb.DiskFullOpt {
 	return txn.diskFullOpt
@@ -377,8 +361,6 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}
 	defer txn.close()
 
-	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
-
 	if val, err := util.EvalFailpoint("mockCommitError"); err == nil && val.(bool) {
 		if _, err := util.EvalFailpoint("mockCommitErrorOpt"); err == nil {
 			failpoint.Disable("tikvclient/mockCommitErrorOpt")
@@ -415,7 +397,6 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}
 
 	txn.committer.SetDiskFullOpt(txn.diskFullOpt)
-	txn.committer.SetTxnSource(txn.txnSource)
 
 	defer committer.ttlManager.close()
 
@@ -436,7 +417,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		detail := committer.getDetail()
 		detail.Mu.Lock()
 		metrics.TiKVTxnCommitBackoffSeconds.Observe(float64(detail.Mu.CommitBackoffTime) / float64(time.Second))
-		metrics.TiKVTxnCommitBackoffCount.Observe(float64(len(detail.Mu.PrewriteBackoffTypes) + len(detail.Mu.CommitBackoffTypes)))
+		metrics.TiKVTxnCommitBackoffCount.Observe(float64(len(detail.Mu.BackoffTypes)))
 		detail.Mu.Unlock()
 
 		ctxValue := ctx.Value(util.CommitDetailCtxKey)
@@ -513,8 +494,7 @@ func (txn *KVTxn) rollbackPessimisticLocks() error {
 	if txn.lockedCnt == 0 {
 		return nil
 	}
-	ctx := context.WithValue(context.Background(), util.RequestSourceKey, *txn.RequestSource)
-	bo := retry.NewBackofferWithVars(ctx, cleanupMaxBackoff, txn.vars)
+	bo := retry.NewBackofferWithVars(context.Background(), cleanupMaxBackoff, txn.vars)
 	if txn.interceptor != nil {
 		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
@@ -603,8 +583,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// it before initiating an RPC request.
 		ctx = interceptor.WithRPCInterceptor(ctx, txn.interceptor)
 	}
-
-	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
 	// Exclude keys that are already locked.
 	var err error
 	keys := make([][]byte, 0, len(keysInput))
@@ -634,10 +612,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			}
 		}
 	}()
-
 	memBuf := txn.us.GetMemBuffer()
-	// Avoid data race with concurrent updates to the memBuf
-	memBuf.RLock()
 	for _, key := range keysInput {
 		// The value of lockedMap is only used by pessimistic transactions.
 		var valueExist, locked, checkKeyExists bool
@@ -652,7 +627,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			if checkKeyExists && valueExist {
 				alreadyExist := kvrpcpb.AlreadyExist{Key: key}
 				e := &tikverr.ErrKeyExist{AlreadyExist: &alreadyExist}
-				memBuf.RUnlock()
 				return txn.committer.extractKeyExistsErr(e)
 			}
 		}
@@ -662,33 +636,11 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			lockCtx.Values[string(key)] = tikv.ReturnedValue{AlreadyLocked: true}
 		}
 	}
-	memBuf.RUnlock()
-
 	if len(keys) == 0 {
 		return nil
 	}
-	if lockCtx.LockOnlyIfExists {
-		if !lockCtx.ReturnValues {
-			return &tikverr.ErrLockOnlyIfExistsNoReturnValue{
-				StartTS:     txn.startTS,
-				ForUpdateTs: lockCtx.ForUpdateTS,
-				LockKey:     keys[0],
-			}
-		}
-		// It can't transform LockOnlyIfExists mode to normal mode. If so, it can add a lock to a key
-		// which doesn't exist in tikv. TiDB should ensure that primary key must be set when it sends
-		// a LockOnlyIfExists pessmistic lock request.
-		if (txn.committer == nil || txn.committer.primaryKey == nil) && len(keys) > 1 {
-			return &tikverr.ErrLockOnlyIfExistsNoPrimaryKey{
-				StartTS:     txn.startTS,
-				ForUpdateTs: lockCtx.ForUpdateTS,
-				LockKey:     keys[0],
-			}
-		}
-	}
 	keys = deduplicateKeys(keys)
 	checkedExistence := false
-	var assignedPrimaryKey bool
 	if txn.IsPessimistic() && lockCtx.ForUpdateTS > 0 {
 		if txn.committer == nil {
 			// sessionID is used for log.
@@ -703,13 +655,14 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				return err
 			}
 		}
+		var assignedPrimaryKey bool
 		if txn.committer.primaryKey == nil {
 			txn.committer.primaryKey = keys[0]
 			assignedPrimaryKey = true
 		}
+
 		lockCtx.Stats = &util.LockKeysDetails{
-			LockKeys:    int32(len(keys)),
-			ResolveLock: util.ResolveLockDetail{},
+			LockKeys: int32(len(keys)),
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
 		txn.committer.forUpdateTS = lockCtx.ForUpdateTS
@@ -717,7 +670,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// concurrently execute on multiple regions may lead to deadlock.
 		txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
 		err = txn.committer.pessimisticLockMutations(bo, lockCtx, &PlainMutations{keys: keys})
-		if lockCtx.Stats != nil && bo.GetTotalSleep() > 0 {
+		if bo.GetTotalSleep() > 0 {
 			atomic.AddInt64(&lockCtx.Stats.BackoffTime, int64(bo.GetTotalSleep())*int64(time.Millisecond))
 			lockCtx.Stats.Mu.Lock()
 			lockCtx.Stats.Mu.BackoffTypes = append(lockCtx.Stats.Mu.BackoffTypes, bo.GetTypes()...)
@@ -730,17 +683,10 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			atomic.CompareAndSwapUint32(lockCtx.Killed, 1, 0)
 		}
 		if err != nil {
-			var unmarkKeys [][]byte
-			// Avoid data race with concurrent updates to the memBuf
-			memBuf.RLock()
 			for _, key := range keys {
 				if txn.us.HasPresumeKeyNotExists(key) {
-					unmarkKeys = append(unmarkKeys, key)
+					txn.us.UnmarkPresumeKeyNotExists(key)
 				}
-			}
-			memBuf.RUnlock()
-			for _, key := range unmarkKeys {
-				txn.us.UnmarkPresumeKeyNotExists(key)
 			}
 			keyMayBeLocked := !(tikverr.IsErrWriteConflict(err) || tikverr.IsErrKeyExist(err))
 			// If there is only 1 key and lock fails, no need to do pessimistic rollback.
@@ -783,13 +729,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			checkedExistence = true
 		}
 	}
-	if assignedPrimaryKey && lockCtx.LockOnlyIfExists {
-		if len(keys) != 1 {
-			panic("LockOnlyIfExists only assigns the primary key when locking only one key")
-		}
-		txn.unsetPrimaryKeyIfNeeded(lockCtx)
-	}
-	skipedLockKeys := 0
 	for _, key := range keys {
 		valExists := tikv.SetKeyLockedValueExists
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
@@ -804,38 +743,14 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				}
 			}
 		}
-
-		if lockCtx.LockOnlyIfExists && valExists == tikv.SetKeyLockedValueNotExists {
-			skipedLockKeys++
-			continue
-		}
 		memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, valExists)
 	}
-	txn.lockedCnt += len(keys) - skipedLockKeys
+	txn.lockedCnt += len(keys)
 	return nil
-}
-
-// unsetPrimaryKeyIfNeed is used to unset primary key of the transaction after performing LockOnlyIfExists.
-// When locking only one key with LockOnlyIfExists flag, the key will be selected as primary if
-// it's the first lock of the transaction. If the key doesn't exist on TiKV, the key won't be
-// locked, in which case we should unset the primary of the transaction.
-// The caller must ensure the conditions below:
-// (1) only one key to be locked (2) primary is not selected before (2) with LockOnlyIfExists
-func (txn *KVTxn) unsetPrimaryKeyIfNeeded(lockCtx *tikv.LockCtx) {
-	if val, ok := lockCtx.Values[string(txn.committer.primaryKey)]; ok {
-		if !val.Exists {
-			txn.committer.primaryKey = nil
-			txn.committer.ttlManager.reset()
-		}
-	}
 }
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.
 func deduplicateKeys(keys [][]byte) [][]byte {
-	if len(keys) == 1 {
-		return keys
-	}
-
 	sort.Slice(keys, func(i, j int) bool {
 		return bytes.Compare(keys[i], keys[j]) < 0
 	})
@@ -953,24 +868,4 @@ func (txn *KVTxn) SetBinlogExecutor(binlog BinlogExecutor) {
 // GetClusterID returns store's cluster id.
 func (txn *KVTxn) GetClusterID() uint64 {
 	return txn.store.GetClusterID()
-}
-
-// SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows
-func (txn *KVTxn) SetMemoryFootprintChangeHook(hook func(uint64)) {
-	txn.us.GetMemBuffer().SetMemoryFootprintChangeHook(hook)
-}
-
-// Mem returns the current memory footprint
-func (txn *KVTxn) Mem() uint64 {
-	return txn.us.GetMemBuffer().Mem()
-}
-
-// SetRequestSourceInternal sets the scope of the request source.
-func (txn *KVTxn) SetRequestSourceInternal(internal bool) {
-	txn.RequestSource.SetRequestSourceInternal(internal)
-}
-
-// SetRequestSourceType sets the type of the request source.
-func (txn *KVTxn) SetRequestSourceType(tp string) {
-	txn.RequestSource.SetRequestSourceType(tp)
 }

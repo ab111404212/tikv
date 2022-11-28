@@ -50,7 +50,6 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
-	"google.golang.org/grpc"
 )
 
 var (
@@ -75,16 +74,6 @@ type rawOptions struct {
 	KeyOnly bool
 }
 
-// RawChecksum represents the checksum result of raw kv pairs in TiKV cluster.
-type RawChecksum struct {
-	// Crc64Xor is the checksum result with crc64 algorithm
-	Crc64Xor uint64
-	// TotalKvs is the total number of kvpairs
-	TotalKvs uint64
-	// TotalBytes is the total bytes of kvpairs, including prefix in APIV2
-	TotalBytes uint64
-}
-
 // RawOption represents possible options that can be cotrolled by the user
 // to tweak the API behavior.
 //
@@ -95,6 +84,7 @@ type RawOption interface {
 	apply(opts *rawOptions)
 }
 
+//
 type rawOptionFunc func(opts *rawOptions)
 
 func (f rawOptionFunc) apply(opts *rawOptions) {
@@ -120,51 +110,12 @@ func ScanKeyOnly() RawOption {
 // Client is a client of TiKV server which is used as a key-value storage,
 // only GET/PUT/DELETE commands are supported.
 type Client struct {
-	apiVersion  kvrpcpb.APIVersion
 	clusterID   uint64
 	regionCache *locate.RegionCache
 	pdClient    pd.Client
 	rpcClient   client.Client
 	cf          string
 	atomic      bool
-}
-
-type option struct {
-	apiVersion      kvrpcpb.APIVersion
-	security        config.Security
-	gRPCDialOptions []grpc.DialOption
-	pdOptions       []pd.ClientOption
-}
-
-// ClientOpt is factory to set the client options.
-type ClientOpt func(*option)
-
-// WithPDOptions is used to set the pd.ClientOption
-func WithPDOptions(opts ...pd.ClientOption) ClientOpt {
-	return func(o *option) {
-		o.pdOptions = append(o.pdOptions, opts...)
-	}
-}
-
-// WithSecurity is used to set the config.Security
-func WithSecurity(security config.Security) ClientOpt {
-	return func(o *option) {
-		o.security = security
-	}
-}
-
-// WithGRPCDialOptions is used to set the grpc.DialOption.
-func WithGRPCDialOptions(opts ...grpc.DialOption) ClientOpt {
-	return func(o *option) {
-		o.gRPCDialOptions = append(o.gRPCDialOptions, opts...)
-	}
-}
-
-// WithAPIVersion is used to set the api version.
-func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
-	return func(o *option) {
-		o.apiVersion = apiVersion
-	}
 }
 
 // SetAtomicForCAS sets atomic mode for CompareAndSwap
@@ -181,36 +132,19 @@ func (c *Client) SetColumnFamily(columnFamily string) *Client {
 
 // NewClient creates a client with PD cluster addrs.
 func NewClient(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*Client, error) {
-	return NewClientWithOpts(ctx, pdAddrs, WithSecurity(security), WithPDOptions(opts...))
-}
-
-// NewClientWithOpts creates a client with PD cluster addrs and client options.
-func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt) (*Client, error) {
-	opt := &option{}
-	for _, o := range opts {
-		o(opt)
-	}
-
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
-		CAPath:   opt.security.ClusterSSLCA,
-		CertPath: opt.security.ClusterSSLCert,
-		KeyPath:  opt.security.ClusterSSLKey,
-	}, opt.pdOptions...)
-
+		CAPath:   security.ClusterSSLCA,
+		CertPath: security.ClusterSSLCert,
+		KeyPath:  security.ClusterSSLKey,
+	}, opts...)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
-	if opt.apiVersion == kvrpcpb.APIVersion_V2 {
-		pdCli = locate.NewCodecPDClientV2(pdCli, client.ModeRaw)
-	}
-
 	return &Client{
-		apiVersion:  opt.apiVersion,
 		clusterID:   pdCli.GetClusterID(ctx),
 		regionCache: locate.NewRegionCache(pdCli),
 		pdClient:    pdCli,
-		rpcClient:   client.NewRPCClient(client.WithSecurity(opt.security), client.WithGRPCDialOptions(opt.gRPCDialOptions...)),
+		rpcClient:   client.NewRPCClient(client.WithSecurity(security)),
 	}, nil
 }
 
@@ -256,10 +190,10 @@ func (c *Client) Get(ctx context.Context, key []byte, options ...RawOption) ([]b
 	if cmdResp.GetError() != "" {
 		return nil, errors.New(cmdResp.GetError())
 	}
-	if cmdResp.NotFound {
+	if len(cmdResp.Value) == 0 {
 		return nil, nil
 	}
-	return convertNilToEmptySlice(cmdResp.Value), nil
+	return cmdResp.Value, nil
 }
 
 const rawkvMaxBackoff = 20000
@@ -290,11 +224,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, options ...RawOpti
 
 	values := make([][]byte, len(keys))
 	for i, key := range keys {
-		v, ok := keyToValue[string(key)]
-		if ok {
-			v = convertNilToEmptySlice(v)
-		}
-		values[i] = v
+		values[i] = keyToValue[string(key)]
 	}
 	return values, nil
 }
@@ -305,6 +235,10 @@ func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64, 
 	defer func() { metrics.RawkvCmdHistogramWithBatchPut.Observe(time.Since(start).Seconds()) }()
 	metrics.RawkvSizeHistogramWithKey.Observe(float64(len(key)))
 	metrics.RawkvSizeHistogramWithValue.Observe(float64(len(value)))
+
+	if len(value) == 0 {
+		return errors.New("empty value is not supported")
+	}
 
 	opts := c.getRawKVOptions(options...)
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
@@ -360,11 +294,6 @@ func (c *Client) GetKeyTTL(ctx context.Context, key []byte, options ...RawOption
 	return &ttl, nil
 }
 
-// GetPDClient returns the PD client.
-func (c *Client) GetPDClient() pd.Client {
-	return c.pdClient
-}
-
 // Put stores a key-value pair to TiKV.
 func (c *Client) Put(ctx context.Context, key, value []byte, options ...RawOption) error {
 	return c.PutWithTTL(ctx, key, value, 0, options...)
@@ -387,6 +316,11 @@ func (c *Client) BatchPutWithTTL(ctx context.Context, keys, values [][]byte, ttl
 	}
 	if len(ttls) > 0 && len(keys) != len(ttls) {
 		return errors.New("the len of ttls is not equal to the len of values")
+	}
+	for _, value := range values {
+		if len(value) == 0 {
+			return errors.New("empty value is not supported")
+		}
 	}
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
 	opts := c.getRawKVOptions(options...)
@@ -512,7 +446,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
 			keys = append(keys, pair.Key)
-			values = append(values, convertNilToEmptySlice(pair.Value))
+			values = append(values, pair.Value)
 		}
 		startKey = loc.EndKey
 		if len(startKey) == 0 {
@@ -560,47 +494,9 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
 			keys = append(keys, pair.Key)
-			values = append(values, convertNilToEmptySlice(pair.Value))
+			values = append(values, pair.Value)
 		}
 		startKey = loc.StartKey
-		if len(startKey) == 0 {
-			break
-		}
-	}
-	return
-}
-
-// Checksum do checksum of continuous kv pairs in range [startKey, endKey).
-// If endKey is empty, it means unbounded.
-// If you want to exclude the startKey or include the endKey, push a '\0' to the key. For example, to scan
-// (startKey, endKey], you can write:
-// `Checksum(ctx, push(startKey, '\0'), push(endKey, '\0'))`.
-func (c *Client) Checksum(ctx context.Context, startKey, endKey []byte, options ...RawOption,
-) (check RawChecksum, err error) {
-
-	start := time.Now()
-	defer func() { metrics.RawkvCmdHistogramWithRawChecksum.Observe(time.Since(start).Seconds()) }()
-
-	for len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0 {
-		req := tikvrpc.NewRequest(tikvrpc.CmdRawChecksum, &kvrpcpb.RawChecksumRequest{
-			Algorithm: kvrpcpb.ChecksumAlgorithm_Crc64_Xor,
-			Ranges: []*kvrpcpb.KeyRange{{
-				StartKey: startKey,
-				EndKey:   endKey,
-			}},
-		})
-		resp, loc, err := c.sendReq(ctx, startKey, req, false)
-		if err != nil {
-			return RawChecksum{0, 0, 0}, err
-		}
-		if resp.Resp == nil {
-			return RawChecksum{0, 0, 0}, errors.WithStack(tikverr.ErrBodyMissing)
-		}
-		cmdResp := resp.Resp.(*kvrpcpb.RawChecksumResponse)
-		check.Crc64Xor ^= cmdResp.GetChecksum()
-		check.TotalKvs += cmdResp.GetTotalKvs()
-		check.TotalBytes += cmdResp.GetTotalBytes()
-		startKey = loc.EndKey
 		if len(startKey) == 0 {
 			break
 		}
@@ -621,6 +517,10 @@ func (c *Client) Checksum(ctx context.Context, startKey, endKey []byte, options 
 func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValue []byte, options ...RawOption) ([]byte, bool, error) {
 	if !c.atomic {
 		return nil, false, errors.New("using CompareAndSwap without enable atomic mode")
+	}
+
+	if len(newValue) == 0 {
+		return nil, false, errors.New("empty value is not supported")
 	}
 
 	opts := c.getRawKVOptions(options...)
@@ -653,7 +553,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 	if cmdResp.PreviousNotExist {
 		return nil, cmdResp.Succeed, nil
 	}
-	return convertNilToEmptySlice(cmdResp.PreviousValue), cmdResp.Succeed, nil
+	return cmdResp.PreviousValue, cmdResp.Succeed, nil
 }
 
 func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, reverse bool) (*tikvrpc.Response, *locate.KeyLocation, error) {
@@ -842,11 +742,11 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 
 func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls []uint64, opts *rawOptions) error {
 	keyToValue := make(map[string][]byte, len(keys))
-	keyToTTL := make(map[string]uint64, len(keys))
+	keyTottl := make(map[string]uint64, len(keys))
 	for i, key := range keys {
 		keyToValue[string(key)] = values[i]
 		if len(ttls) > 0 {
-			keyToTTL[string(key)] = ttls[i]
+			keyTottl[string(key)] = ttls[i]
 		}
 	}
 	groups, _, err := c.regionCache.GroupKeysByRegion(bo, keys, nil)
@@ -856,7 +756,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 	var batches []kvrpc.Batch
 	// split the keys by size and RegionVerID
 	for regionID, groupKeys := range groups {
-		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyToTTL, rawBatchPutSize)
+		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyTottl, rawBatchPutSize)
 	}
 	bo, cancel := bo.Fork()
 	ch := make(chan error, len(batches))
@@ -902,7 +802,6 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawOpt
 
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
-	req.ApiVersion = c.apiVersion
 	resp, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 	if err != nil {
 		return err
@@ -943,15 +842,4 @@ func (c *Client) getRawKVOptions(options ...RawOption) *rawOptions {
 		op.apply(&opts)
 	}
 	return &opts
-}
-
-// convertNilToEmptySlice is used to convert value of existed key return from TiKV.
-// Convert nil to `[]byte{}` for indicating an empty value, and distinguishing from "not found",
-// which is necessary when putting empty value is permitted.
-// Also note that gRPC will always transfer empty byte slice as nil.
-func convertNilToEmptySlice(value []byte) []byte {
-	if value == nil {
-		return []byte{}
-	}
-	return value
 }

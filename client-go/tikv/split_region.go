@@ -144,8 +144,7 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 	req := tikvrpc.NewRequest(tikvrpc.CmdSplitRegion, &kvrpcpb.SplitRegionRequest{
 		SplitKeys: batch.Keys,
 	}, kvrpcpb.Context{
-		Priority:      kvrpcpb.CommandPri_Normal,
-		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
+		Priority: kvrpcpb.CommandPri_Normal,
 	})
 
 	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient())

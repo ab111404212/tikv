@@ -72,8 +72,6 @@ const (
 	CmdTxnHeartBeat
 	CmdCheckTxnStatus
 	CmdCheckSecondaryLocks
-	CmdFlashbackToVersion
-	CmdPrepareFlashbackToVersion
 
 	CmdRawGet CmdType = 256 + iota
 	CmdRawBatchGet
@@ -85,7 +83,6 @@ const (
 	CmdRawScan
 	CmdGetKeyTTL
 	CmdRawCompareAndSwap
-	CmdRawChecksum
 
 	CmdUnsafeDestroyRange
 
@@ -159,8 +156,6 @@ func (t CmdType) String() string {
 		return "RawDeleteRange"
 	case CmdRawScan:
 		return "RawScan"
-	case CmdRawChecksum:
-		return "RawChecksum"
 	case CmdUnsafeDestroyRange:
 		return "UnsafeDestroyRange"
 	case CmdRegisterLockObserver:
@@ -205,10 +200,6 @@ func (t CmdType) String() string {
 		return "StoreSafeTS"
 	case CmdLockWaitInfo:
 		return "LockWaitInfo"
-	case CmdFlashbackToVersion:
-		return "FlashbackToVersion"
-	case CmdPrepareFlashbackToVersion:
-		return "PrepareFlashbackToVersion"
 	}
 	return "Unknown"
 }
@@ -397,11 +388,6 @@ func (req *Request) RawCompareAndSwap() *kvrpcpb.RawCASRequest {
 	return req.Req.(*kvrpcpb.RawCASRequest)
 }
 
-// RawChecksum returns RawChecksumRequest in request.
-func (req *Request) RawChecksum() *kvrpcpb.RawChecksumRequest {
-	return req.Req.(*kvrpcpb.RawChecksumRequest)
-}
-
 // RegisterLockObserver returns RegisterLockObserverRequest in request.
 func (req *Request) RegisterLockObserver() *kvrpcpb.RegisterLockObserverRequest {
 	return req.Req.(*kvrpcpb.RegisterLockObserverRequest)
@@ -517,16 +503,6 @@ func (req *Request) LockWaitInfo() *kvrpcpb.GetLockWaitInfoRequest {
 	return req.Req.(*kvrpcpb.GetLockWaitInfoRequest)
 }
 
-// FlashbackToVersion returns FlashbackToVersionRequest in request.
-func (req *Request) FlashbackToVersion() *kvrpcpb.FlashbackToVersionRequest {
-	return req.Req.(*kvrpcpb.FlashbackToVersionRequest)
-}
-
-// PrepareFlashbackToVersion returns PrepareFlashbackToVersion in request.
-func (req *Request) PrepareFlashbackToVersion() *kvrpcpb.PrepareFlashbackToVersionRequest {
-	return req.Req.(*kvrpcpb.PrepareFlashbackToVersionRequest)
-}
-
 // ToBatchCommandsRequest converts the request to an entry in BatchCommands request.
 func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Request {
 	switch req.Type {
@@ -582,10 +558,6 @@ func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Reques
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_CheckSecondaryLocks{CheckSecondaryLocks: req.CheckSecondaryLocks()}}
 	case CmdTxnHeartBeat:
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_TxnHeartBeat{TxnHeartBeat: req.TxnHeartBeat()}}
-	case CmdFlashbackToVersion:
-		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_FlashbackToVersion{FlashbackToVersion: req.FlashbackToVersion()}}
-	case CmdPrepareFlashbackToVersion:
-		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_PrepareFlashbackToVersion{PrepareFlashbackToVersion: req.PrepareFlashbackToVersion()}}
 	}
 	return nil
 }
@@ -623,10 +595,6 @@ func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Res
 		return &Response{Resp: res.GC}, nil
 	case *tikvpb.BatchCommandsResponse_Response_DeleteRange:
 		return &Response{Resp: res.DeleteRange}, nil
-	case *tikvpb.BatchCommandsResponse_Response_FlashbackToVersion:
-		return &Response{Resp: res.FlashbackToVersion}, nil
-	case *tikvpb.BatchCommandsResponse_Response_PrepareFlashbackToVersion:
-		return &Response{Resp: res.PrepareFlashbackToVersion}, nil
 	case *tikvpb.BatchCommandsResponse_Response_RawGet:
 		return &Response{Resp: res.RawGet}, nil
 	case *tikvpb.BatchCommandsResponse_Response_RawBatchGet:
@@ -739,14 +707,12 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.RawDeleteRange().Context = ctx
 	case CmdRawScan:
 		req.RawScan().Context = ctx
+	case CmdUnsafeDestroyRange:
+		req.UnsafeDestroyRange().Context = ctx
 	case CmdGetKeyTTL:
 		req.RawGetKeyTTL().Context = ctx
 	case CmdRawCompareAndSwap:
 		req.RawCompareAndSwap().Context = ctx
-	case CmdRawChecksum:
-		req.RawChecksum().Context = ctx
-	case CmdUnsafeDestroyRange:
-		req.UnsafeDestroyRange().Context = ctx
 	case CmdRegisterLockObserver:
 		req.RegisterLockObserver().Context = ctx
 	case CmdCheckLockObserver:
@@ -777,10 +743,6 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.CheckTxnStatus().Context = ctx
 	case CmdCheckSecondaryLocks:
 		req.CheckSecondaryLocks().Context = ctx
-	case CmdFlashbackToVersion:
-		req.FlashbackToVersion().Context = ctx
-	case CmdPrepareFlashbackToVersion:
-		req.PrepareFlashbackToVersion().Context = ctx
 	default:
 		return errors.Errorf("invalid request type %v", req.Type)
 	}
@@ -889,10 +851,6 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.RawCASResponse{
 			RegionError: e,
 		}
-	case CmdRawChecksum:
-		p = &kvrpcpb.RawChecksumResponse{
-			RegionError: e,
-		}
 	case CmdCop:
 		p = &coprocessor.Response{
 			RegionError: e,
@@ -928,14 +886,6 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.CheckSecondaryLocksResponse{
 			RegionError: e,
 		}
-	case CmdFlashbackToVersion:
-		p = &kvrpcpb.FlashbackToVersionResponse{
-			RegionError: e,
-		}
-	case CmdPrepareFlashbackToVersion:
-		p = &kvrpcpb.PrepareFlashbackToVersionResponse{
-			RegionError: e,
-		}
 	default:
 		return nil, errors.Errorf("invalid request type %v", req.Type)
 	}
@@ -960,22 +910,6 @@ func (resp *Response) GetRegionError() (*errorpb.Error, error) {
 		return nil, errors.Errorf("invalid response type %v", resp)
 	}
 	return err.GetRegionError(), nil
-}
-
-type getExecDetailsV2 interface {
-	GetExecDetailsV2() *kvrpcpb.ExecDetailsV2
-}
-
-// GetExecDetailsV2 returns the ExecDetailsV2 of the underlying concrete response.
-func (resp *Response) GetExecDetailsV2() *kvrpcpb.ExecDetailsV2 {
-	if resp == nil || resp.Resp == nil {
-		return nil
-	}
-	details, ok := resp.Resp.(getExecDetailsV2)
-	if !ok {
-		return nil
-	}
-	return details.GetExecDetailsV2()
 }
 
 // CallRPC launches a rpc call.
@@ -1033,8 +967,6 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.RawGetKeyTTL(ctx, req.RawGetKeyTTL())
 	case CmdRawCompareAndSwap:
 		resp.Resp, err = client.RawCompareAndSwap(ctx, req.RawCompareAndSwap())
-	case CmdRawChecksum:
-		resp.Resp, err = client.RawChecksum(ctx, req.RawChecksum())
 	case CmdRegisterLockObserver:
 		resp.Resp, err = client.RegisterLockObserver(ctx, req.RegisterLockObserver())
 	case CmdCheckLockObserver:
@@ -1090,10 +1022,6 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.GetLockWaitInfo(ctx, req.LockWaitInfo())
 	case CmdCompact:
 		resp.Resp, err = client.Compact(ctx, req.Compact())
-	case CmdFlashbackToVersion:
-		resp.Resp, err = client.KvFlashbackToVersion(ctx, req.FlashbackToVersion())
-	case CmdPrepareFlashbackToVersion:
-		resp.Resp, err = client.KvPrepareFlashbackToVersion(ctx, req.PrepareFlashbackToVersion())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
@@ -1255,9 +1183,7 @@ func (req *Request) IsTxnWriteRequest() bool {
 		req.Type == CmdCheckSecondaryLocks ||
 		req.Type == CmdCleanup ||
 		req.Type == CmdTxnHeartBeat ||
-		req.Type == CmdResolveLock ||
-		req.Type == CmdFlashbackToVersion ||
-		req.Type == CmdPrepareFlashbackToVersion {
+		req.Type == CmdResolveLock {
 		return true
 	}
 	return false

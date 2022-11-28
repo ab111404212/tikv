@@ -53,7 +53,6 @@ var (
 	RawkvCmdHistogramWithRawReversScan prometheus.Observer
 	RawkvSizeHistogramWithKey          prometheus.Observer
 	RawkvSizeHistogramWithValue        prometheus.Observer
-	RawkvCmdHistogramWithRawChecksum   prometheus.Observer
 
 	BackoffHistogramRPC                      prometheus.Observer
 	BackoffHistogramLock                     prometheus.Observer
@@ -153,7 +152,6 @@ func initShortcuts() {
 	RawkvCmdHistogramWithRawReversScan = TiKVRawkvCmdHistogram.WithLabelValues("raw_reverse_scan")
 	RawkvSizeHistogramWithKey = TiKVRawkvSizeHistogram.WithLabelValues("key")
 	RawkvSizeHistogramWithValue = TiKVRawkvSizeHistogram.WithLabelValues("value")
-	RawkvCmdHistogramWithRawChecksum = TiKVRawkvSizeHistogram.WithLabelValues("raw_checksum")
 
 	BackoffHistogramRPC = TiKVBackoffHistogram.WithLabelValues("tikvRPC")
 	BackoffHistogramLock = TiKVBackoffHistogram.WithLabelValues("txnLock")
