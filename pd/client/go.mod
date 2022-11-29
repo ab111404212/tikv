@@ -1,4 +1,4 @@
-module github.com/ab111404212/pd/client
+module github.com/ab111404212/tikv/pd/client
 
 go 1.18
 
@@ -10,7 +10,7 @@ require (
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/prometheus/client_golang v1.14.0
 	github.com/stretchr/testify v1.8.1
-	github.com/tikv/pd/client v0.0.0-20221128082800-2a4f9a0dd14c
+	github.com/tikv/pd/client v0.0.0-20221129021759-c6537d9f496f
 	go.uber.org/goleak v1.2.0
 	go.uber.org/zap v1.23.0
 	google.golang.org/grpc v1.51.0
@@ -38,5 +38,3 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/pingcap/kvproto v0.0.0-20221123043343-cdc67325f05f => github.com/ab111404212/kvproto v0.0.0-20221128084830-a1b122026925
