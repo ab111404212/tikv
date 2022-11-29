@@ -15,7 +15,7 @@
 package txnkv
 
 import (
-	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/ab111404212/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
 // Scanner support tikv scan
@@ -29,6 +29,10 @@ type SnapshotRuntimeStats = txnsnapshot.SnapshotRuntimeStats
 
 // IsoLevel is the transaction's isolation level.
 type IsoLevel = txnsnapshot.IsoLevel
+
+// ReplicaReadAdjuster is a function that adjust the StoreSelectorOption and ReplicaReadType
+// based on the keys count for BatchPointGet and PointGet
+type ReplicaReadAdjuster = txnsnapshot.ReplicaReadAdjuster
 
 // IsoLevel value for transaction priority.
 const (

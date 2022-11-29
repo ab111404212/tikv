@@ -38,17 +38,17 @@ import (
 	"encoding/hex"
 	"time"
 
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/internal/client"
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
+	"github.com/ab111404212/tikv/client-go/v2/internal/logutil"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/metrics"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/tikvrpc"
 	"go.uber.org/zap"
 )
 
@@ -70,9 +70,15 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 		StartVersion:  c.startTS,
 		Keys:          keys,
 		CommitVersion: c.commitTS,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog,
-		ResourceGroupTag: c.resourceGroupTag, DiskFullOpt: c.diskFullOpt,
-		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	}, kvrpcpb.Context{
+		Priority:               c.priority,
+		SyncLog:                c.syncLog,
+		ResourceGroupTag:       c.resourceGroupTag,
+		DiskFullOpt:            c.diskFullOpt,
+		TxnSource:              c.txnSource,
+		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
+		RequestSource:          c.txn.GetRequestSource(),
+	})
 	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
 		c.resourceGroupTagger(req)
 	}
@@ -83,7 +89,8 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 	for {
 		attempts++
-		if time.Since(tBegin) > slowRequestThreshold {
+		reqBegin := time.Now()
+		if reqBegin.Sub(tBegin) > slowRequestThreshold {
 			logutil.BgLogger().Warn("slow commit request", zap.Uint64("startTS", c.startTS), zap.Stringer("region", &batch.region), zap.Int("attempts", attempts))
 			tBegin = time.Now()
 		}
@@ -135,6 +142,8 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 		// we can clean undetermined error.
 		if batch.isPrimary && !c.isAsyncCommit() {
 			c.setUndeterminedErr(nil)
+			reqDuration := time.Since(reqBegin)
+			c.getDetail().MergeCommitReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), commitResp.ExecDetailsV2)
 		}
 		if keyErr := commitResp.GetError(); keyErr != nil {
 			if rejected := keyErr.GetCommitTsExpired(); rejected != nil {

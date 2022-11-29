@@ -25,9 +25,9 @@ import (
 	"sync"
 	"time"
 
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/util"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/util"
 )
 
 // ReturnedValue pairs the Value and AlreadyLocked flag for PessimisticLock return values result.
@@ -65,6 +65,7 @@ type LockCtx struct {
 	LockKeysCount         *int32
 	ReturnValues          bool
 	CheckExistence        bool
+	LockOnlyIfExists      bool
 	Values                map[string]ReturnedValue
 	ValuesLock            sync.Mutex
 	LockExpired           *uint32

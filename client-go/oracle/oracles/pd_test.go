@@ -40,9 +40,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ab111404212/tikv/client-go/v2/oracle"
+	"github.com/ab111404212/tikv/client-go/v2/oracle/oracles"
 	"github.com/stretchr/testify/assert"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/oracle/oracles"
 )
 
 func TestPDOracle_UntilExpired(t *testing.T) {

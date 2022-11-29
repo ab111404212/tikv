@@ -20,18 +20,18 @@ import (
 	"sync"
 	"time"
 
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
+	"github.com/ab111404212/tikv/client-go/v2/internal/logutil"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
+	"github.com/ab111404212/tikv/client-go/v2/metrics"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
+	"github.com/ab111404212/tikv/client-go/v2/txnkv/rangetask"
+	"github.com/ab111404212/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/txnkv/rangetask"
-	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	zap "go.uber.org/zap"
 )
 
@@ -275,7 +275,7 @@ func (s *KVStore) listStoresForUnsafeDestory(ctx context.Context) ([]*metapb.Sto
 		if store.State == metapb.StoreState_Tombstone {
 			continue
 		}
-		if tikvrpc.GetStoreTypeByMeta(store) == tikvrpc.TiFlash {
+		if tikvrpc.GetStoreTypeByMeta(store).IsTiFlashRelatedType() {
 			continue
 		}
 		upStores = append(upStores, store)

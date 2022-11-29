@@ -20,12 +20,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/internal/unionstore"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/internal/unionstore"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
+	"github.com/ab111404212/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
 // TxnProbe wraps a txn and exports internal states for testing purpose.
@@ -90,6 +90,11 @@ func (txn TxnProbe) NewScanner(start, end []byte, batchSize int, reverse bool) (
 // GetStartTime returns the time when txn starts.
 func (txn TxnProbe) GetStartTime() time.Time {
 	return txn.startTime
+}
+
+// GetLockedCount returns the count of locks acquired by the transaction
+func (txn TxnProbe) GetLockedCount() int {
+	return txn.lockedCnt
 }
 
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {

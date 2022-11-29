@@ -40,20 +40,20 @@ import (
 	"fmt"
 	"math"
 
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/internal/client"
+	"github.com/ab111404212/tikv/client-go/v2/internal/kvrpc"
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
+	"github.com/ab111404212/tikv/client-go/v2/internal/logutil"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
+	"github.com/ab111404212/tikv/client-go/v2/txnkv/rangetask"
+	"github.com/ab111404212/tikv/client-go/v2/util"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/kvrpc"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/txnkv/rangetask"
-	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -144,7 +144,8 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 	req := tikvrpc.NewRequest(tikvrpc.CmdSplitRegion, &kvrpcpb.SplitRegionRequest{
 		SplitKeys: batch.Keys,
 	}, kvrpcpb.Context{
-		Priority: kvrpcpb.CommandPri_Normal,
+		Priority:      kvrpcpb.CommandPri_Normal,
+		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 	})
 
 	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient())

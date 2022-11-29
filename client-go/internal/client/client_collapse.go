@@ -40,8 +40,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/tikvrpc"
 	"golang.org/x/sync/singleflight"
 )
 

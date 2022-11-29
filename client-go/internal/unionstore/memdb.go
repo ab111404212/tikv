@@ -41,8 +41,8 @@ import (
 	"sync"
 	"unsafe"
 
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/kv"
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
 )
 
 var tombstone = []byte{}
@@ -85,16 +85,17 @@ type MemDB struct {
 
 	vlogInvalid bool
 	dirty       bool
-	stages      []memdbCheckpoint
+	stages      []MemDBCheckpoint
 }
 
 func newMemDB() *MemDB {
 	db := new(MemDB)
 	db.allocator.init()
 	db.root = nullAddr
-	db.stages = make([]memdbCheckpoint, 0, 2)
+	db.stages = make([]MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = math.MaxUint64
 	db.bufferSizeLimit = math.MaxUint64
+	db.vlog.memdb = db
 	return db
 }
 
@@ -153,6 +154,18 @@ func (db *MemDB) Cleanup(h int) {
 		}
 	}
 	db.stages = db.stages[:h-1]
+}
+
+// Checkpoint returns a checkpoint of MemDB.
+func (db *MemDB) Checkpoint() *MemDBCheckpoint {
+	cp := db.vlog.checkpoint()
+	return &cp
+}
+
+// RevertToCheckpoint reverts the MemDB to the checkpoint.
+func (db *MemDB) RevertToCheckpoint(cp *MemDBCheckpoint) {
+	db.vlog.revertToCheckpoint(db, cp)
+	db.vlog.truncate(cp)
 }
 
 // Reset resets the MemBuffer to initial states.
@@ -318,13 +331,20 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	}
 	x := db.traverse(key, true)
 
-	if len(ops) != 0 {
-		flags := kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
-		if flags.AndPersistent() != 0 {
-			db.dirty = true
-		}
-		x.setKeyFlags(flags)
+	// the NeedConstraintCheckInPrewrite flag is temporary,
+	// every write to the node removes the flag unless it's explicitly set.
+	// This set must be in the latest stage so no special processing is needed.
+	var flags kv.KeyFlags
+	if value != nil {
+		flags = kv.ApplyFlagsOps(x.getKeyFlags(), append([]kv.FlagsOp{kv.DelNeedConstraintCheckInPrewrite}, ops...)...)
+	} else {
+		// an UpdateFlag operation, do not delete the NeedConstraintCheckInPrewrite flag.
+		flags = kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
 	}
+	if flags.AndPersistent() != 0 {
+		db.dirty = true
+	}
+	x.setKeyFlags(flags)
 
 	if value == nil {
 		return nil
@@ -338,7 +358,7 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 }
 
 func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
-	var activeCp *memdbCheckpoint
+	var activeCp *MemDBCheckpoint
 	if len(db.stages) > 0 {
 		activeCp = &db.stages[len(db.stages)-1]
 	}
@@ -844,4 +864,18 @@ func (db *MemDB) RemoveFromBuffer(key []byte) {
 	}
 	db.size -= len(db.vlog.getValue(x.vptr))
 	db.deleteNode(x)
+}
+
+// SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows.
+func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
+	innerHook := func() {
+		hook(db.allocator.capacity + db.vlog.capacity)
+	}
+	db.allocator.memChangeHook.Store(&innerHook)
+	db.vlog.memChangeHook.Store(&innerHook)
+}
+
+// Mem returns the current memory footprint
+func (db *MemDB) Mem() uint64 {
+	return db.allocator.capacity + db.vlog.capacity
 }

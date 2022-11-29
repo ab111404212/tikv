@@ -18,11 +18,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/ab111404212/tikv/client-go/v2/config"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/oracle"
+	"github.com/ab111404212/tikv/client-go/v2/tikv"
+	"github.com/ab111404212/tikv/client-go/v2/txnkv/transaction"
 )
 
 // Client is a txn client.

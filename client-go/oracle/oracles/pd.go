@@ -41,10 +41,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ab111404212/tikv/client-go/v2/internal/logutil"
+	"github.com/ab111404212/tikv/client-go/v2/metrics"
+	"github.com/ab111404212/tikv/client-go/v2/oracle"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -326,4 +326,12 @@ func (o *pdOracle) GetStaleTimestamp(ctx context.Context, txnScope string, prevS
 		return 0, err
 	}
 	return ts, nil
+}
+
+func (o *pdOracle) SetExternalTimestamp(ctx context.Context, ts uint64) error {
+	return o.c.SetExternalTimestamp(ctx, ts)
+}
+
+func (o *pdOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) {
+	return o.c.GetExternalTimestamp(ctx)
 }

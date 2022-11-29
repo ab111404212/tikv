@@ -35,8 +35,8 @@
 package unionstore
 
 import (
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/kv"
+	"github.com/ab111404212/tikv/client-go/v2/internal/logutil"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
 	"go.uber.org/zap"
 )
 

@@ -37,12 +37,12 @@ package txnsnapshot
 import (
 	"time"
 
-	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/txnkv/txnlock"
-	"github.com/tikv/client-go/v2/util"
+	"github.com/ab111404212/tikv/client-go/v2/internal/client"
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
+	"github.com/ab111404212/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/ab111404212/tikv/client-go/v2/util"
 )
 
 // ClientHelper wraps LockResolver and RegionRequestSender.
@@ -75,6 +75,28 @@ func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, committedLocks *u
 		client:         store.GetTiKVClient(),
 		resolveLite:    resolveLite,
 	}
+}
+
+// ResolveLocksWithOpts wraps the ResolveLocksWithOpts function and store the resolved result.
+func (ch *ClientHelper) ResolveLocksWithOpts(bo *retry.Backoffer, opts txnlock.ResolveLocksOptions) (txnlock.ResolveLockResult, error) {
+	if ch.Stats != nil {
+		defer func(start time.Time) {
+			locate.RecordRegionRequestRuntimeStats(ch.Stats, tikvrpc.CmdResolveLock, time.Since(start))
+		}(time.Now())
+	}
+	opts.ForRead = true
+	opts.Lite = ch.resolveLite
+	res, err := ch.lockResolver.ResolveLocksWithOpts(bo, opts)
+	if err != nil {
+		return res, err
+	}
+	if len(res.IgnoreLocks) > 0 {
+		ch.resolvedLocks.Put(res.IgnoreLocks...)
+	}
+	if len(res.AccessLocks) > 0 {
+		ch.committedLocks.Put(res.AccessLocks...)
+	}
+	return res, nil
 }
 
 // ResolveLocks wraps the ResolveLocks function and store the resolved result.

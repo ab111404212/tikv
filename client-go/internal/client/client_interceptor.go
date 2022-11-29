@@ -18,8 +18,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc/interceptor"
 )
 
 var _ Client = interceptedClient{}

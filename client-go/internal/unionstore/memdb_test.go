@@ -41,10 +41,10 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/ab111404212/tikv/client-go/v2/kv"
 	leveldb "github.com/pingcap/goleveldb/leveldb/memdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/kv"
 )
 
 type KeyFlags = kv.KeyFlags
@@ -827,4 +827,16 @@ func TestBufferLimit(t *testing.T) {
 
 	err = buffer.Delete(make([]byte, 500))
 	assert.NotNil(err)
+}
+
+func TestUnsetTemporaryFlag(t *testing.T) {
+	require := require.New(t)
+	db := newMemDB()
+	key := []byte{1}
+	value := []byte{2}
+	db.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
+	db.Set(key, value)
+	flags, err := db.GetFlags(key)
+	require.Nil(err)
+	require.False(flags.HasNeedConstraintCheckInPrewrite())
 }

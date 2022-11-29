@@ -36,9 +36,15 @@ package mocktikv
 
 import (
 	"bytes"
+	"hash/crc64"
 	"math"
 	"sync"
 
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/internal/logutil"
+	"github.com/ab111404212/tikv/client-go/v2/internal/mockstore/deadlock"
+	"github.com/ab111404212/tikv/client-go/v2/oracle"
+	"github.com/ab111404212/tikv/client-go/v2/util/codec"
 	"github.com/dgryski/go-farm"
 	"github.com/pingcap/goleveldb/leveldb"
 	"github.com/pingcap/goleveldb/leveldb/iterator"
@@ -47,11 +53,6 @@ import (
 	"github.com/pingcap/goleveldb/leveldb/util"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/mockstore/deadlock"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/util/codec"
 	"go.uber.org/zap"
 )
 
@@ -531,10 +532,11 @@ type lockCtx struct {
 	ttl         uint64
 	minCommitTs uint64
 
-	returnValues   bool
-	checkExistence bool
-	values         [][]byte
-	keyNotFound    []bool
+	returnValues     bool
+	checkExistence   bool
+	values           [][]byte
+	keyNotFound      []bool
+	LockOnlyIfExists bool
 }
 
 // PessimisticLock writes the pessimistic lock.
@@ -544,13 +546,14 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 	defer mvcc.mu.Unlock()
 	mutations := req.Mutations
 	lCtx := &lockCtx{
-		startTS:        req.StartVersion,
-		forUpdateTS:    req.ForUpdateTs,
-		primary:        req.PrimaryLock,
-		ttl:            req.LockTtl,
-		minCommitTs:    req.MinCommitTs,
-		returnValues:   req.ReturnValues,
-		checkExistence: req.CheckExistence,
+		startTS:          req.StartVersion,
+		forUpdateTS:      req.ForUpdateTs,
+		primary:          req.PrimaryLock,
+		ttl:              req.LockTtl,
+		minCommitTs:      req.MinCommitTs,
+		returnValues:     req.ReturnValues,
+		checkExistence:   req.CheckExistence,
+		LockOnlyIfExists: req.LockOnlyIfExists,
 	}
 	lockWaitTime := req.WaitTimeout
 
@@ -593,6 +596,11 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation *kvrpcpb.Mutation, lctx *lockCtx) error {
 	startTS := lctx.startTS
 	forUpdateTS := lctx.forUpdateTS
+
+	if lctx.LockOnlyIfExists && !lctx.returnValues {
+		return errors.New("LockOnlyIfExists is set for LockKeys but ReturnValues is not set")
+	}
+
 	startKey := mvccEncode(mutation.Key, lockVer)
 	iter := newIterator(mvcc.getDB(""), &util.Range{
 		Start: startKey,
@@ -632,6 +640,10 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
 	} else if lctx.checkExistence {
 		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
+	}
+
+	if lctx.LockOnlyIfExists && len(val) == 0 {
+		return nil
 	}
 
 	lock := mvccLock{
@@ -738,8 +750,12 @@ func (mvcc *MVCCLevelDB) Prewrite(req *kvrpcpb.PrewriteRequest) []error {
 		if op == kvrpcpb.Op_CheckNotExists {
 			continue
 		}
-		isPessimisticLock := len(req.IsPessimisticLock) > 0 && req.IsPessimisticLock[i]
-		err = prewriteMutation(mvcc.getDB(""), batch, m, startTS, primary, ttl, txnSize, isPessimisticLock, minCommitTS, req.AssertionLevel)
+
+		pessimisticAction := kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
+		if len(req.PessimisticActions) > 0 {
+			pessimisticAction = req.PessimisticActions[i]
+		}
+		err = prewriteMutation(mvcc.getDB(""), batch, m, startTS, primary, ttl, txnSize, pessimisticAction, minCommitTS, req.AssertionLevel)
 		errs = append(errs, err)
 		if err != nil {
 			anyError = true
@@ -870,7 +886,7 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 	mutation *kvrpcpb.Mutation, startTS uint64,
 	primary []byte, ttl uint64, txnSize uint64,
-	isPessimisticLock bool, minCommitTS uint64,
+	pessimisticAction kvrpcpb.PrewriteRequest_PessimisticAction, minCommitTS uint64,
 	assertionLevel kvrpcpb.AssertionLevel) error {
 	startKey := mvccEncode(mutation.Key, lockVer)
 	iter := newIterator(db, &util.Range{
@@ -887,7 +903,7 @@ func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 	}
 	if ok {
 		if dec.lock.startTS != startTS {
-			if isPessimisticLock {
+			if pessimisticAction == kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK {
 				// NOTE: A special handling.
 				// When pessimistic txn prewrite meets lock, set the TTL = 0 means
 				// telling TiDB to rollback the transaction **unconditionly**.
@@ -912,7 +928,7 @@ func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 			return err
 		}
 	} else {
-		if isPessimisticLock {
+		if pessimisticAction == kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK {
 			return ErrAbort("pessimistic lock not found")
 		}
 		_, err = checkConflictValue(iter, mutation, startTS, startTS, false, assertionLevel)
@@ -1659,6 +1675,9 @@ func (mvcc *MVCCLevelDB) RawGet(cf string, key []byte) []byte {
 	}
 
 	ret, err := db.Get(key, nil)
+	if err == leveldb.ErrNotFound {
+		return nil
+	}
 	tikverr.Log(err)
 	return ret
 }
@@ -1676,7 +1695,9 @@ func (mvcc *MVCCLevelDB) RawBatchGet(cf string, keys [][]byte) [][]byte {
 	values := make([][]byte, 0, len(keys))
 	for _, key := range keys {
 		value, err := db.Get(key, nil)
-		tikverr.Log(err)
+		if err != leveldb.ErrNotFound {
+			tikverr.Log(err)
+		}
 		values = append(values, value)
 	}
 	return values
@@ -1776,6 +1797,44 @@ func (mvcc *MVCCLevelDB) RawReverseScan(cf string, startKey, endKey []byte, limi
 		success = iter.Prev()
 	}
 	return pairs
+}
+
+// RawChecksum implements the RawKV interface.
+func (mvcc *MVCCLevelDB) RawChecksum(cf string, startKey, endKey []byte) (uint64, uint64, uint64, error) {
+	mvcc.mu.Lock()
+	defer mvcc.mu.Unlock()
+
+	db := mvcc.getDB(cf)
+	if db == nil {
+		return 0, 0, 0, nil
+	}
+
+	iter := db.NewIterator(&util.Range{
+		Start: startKey,
+	}, nil)
+
+	crc64Xor := uint64(0)
+	totalKvs := uint64(0)
+	totalBytes := uint64(0)
+	digest := crc64.New(crc64.MakeTable(crc64.ECMA))
+	for iter.Next() {
+		key := iter.Key()
+		value := iter.Value()
+		err := iter.Error()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if len(endKey) > 0 && bytes.Compare(key, endKey) >= 0 {
+			break
+		}
+		digest.Reset()
+		digest.Write(key)
+		digest.Write(value)
+		crc64Xor ^= digest.Sum64()
+		totalKvs++
+		totalBytes += (uint64)(len(key) + len(value))
+	}
+	return crc64Xor, totalKvs, totalBytes, nil
 }
 
 // RawDeleteRange implements the RawKV interface.

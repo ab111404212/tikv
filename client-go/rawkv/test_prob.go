@@ -15,8 +15,8 @@
 package rawkv
 
 import (
-	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/ab111404212/tikv/client-go/v2/internal/client"
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
 	pd "github.com/tikv/pd/client"
 )
 

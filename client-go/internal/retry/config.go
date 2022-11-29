@@ -41,11 +41,11 @@ import (
 	"strings"
 	"time"
 
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/internal/logutil"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
+	"github.com/ab111404212/tikv/client-go/v2/metrics"
 	"github.com/prometheus/client_golang/prometheus"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/metrics"
 	"go.uber.org/zap"
 )
 
@@ -123,7 +123,7 @@ var (
 	BoTxnNotFound              = NewConfig("txnNotFound", &metrics.BackoffHistogramEmpty, NewBackoffFnCfg(2, 500, NoJitter), tikverr.ErrResolveLockTimeout)
 	BoStaleCmd                 = NewConfig("staleCommand", &metrics.BackoffHistogramStaleCmd, NewBackoffFnCfg(2, 1000, NoJitter), tikverr.ErrTiKVStaleCommand)
 	BoMaxTsNotSynced           = NewConfig("maxTsNotSynced", &metrics.BackoffHistogramEmpty, NewBackoffFnCfg(2, 500, NoJitter), tikverr.ErrTiKVMaxTimestampNotSynced)
-	BoMaxDataNotReady          = NewConfig("dataNotReady", &metrics.BackoffHistogramDataNotReady, NewBackoffFnCfg(100, 2000, NoJitter), tikverr.ErrRegionDataNotReady)
+	BoMaxDataNotReady          = NewConfig("dataNotReady", &metrics.BackoffHistogramDataNotReady, NewBackoffFnCfg(2, 2000, NoJitter), tikverr.ErrRegionDataNotReady)
 	BoMaxRegionNotInitialized  = NewConfig("regionNotInitialized", &metrics.BackoffHistogramEmpty, NewBackoffFnCfg(2, 1000, NoJitter), tikverr.ErrRegionNotInitialized)
 	// TxnLockFast's `base` load from vars.BackoffLockFast when create BackoffFn.
 	BoTxnLockFast = NewConfig(txnLockFastName, &metrics.BackoffHistogramLockFast, NewBackoffFnCfg(2, 3000, EqualJitter), tikverr.ErrResolveLockTimeout)

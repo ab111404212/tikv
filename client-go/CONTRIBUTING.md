@@ -18,7 +18,7 @@ It is important to note that we enforces the [Developer Certificate of Origin](h
 
 ## Reporting issues
 
-We use GitHub to track public bugs and issues. Report an issue by [opening a new issue](https://github.com/tikv/client-go/issues/new).
+We use GitHub to track public bugs and issues. Report an issue by [opening a new issue](https://github.com/ab111404212/tikv/client-go/issues/new).
 
 **Great Bug Reports** tend to have:
 

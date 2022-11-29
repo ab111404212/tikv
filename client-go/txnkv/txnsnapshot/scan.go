@@ -38,17 +38,17 @@ import (
 	"bytes"
 	"context"
 
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/internal/client"
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
+	"github.com/ab111404212/tikv/client-go/v2/internal/logutil"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc/interceptor"
+	"github.com/ab111404212/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
-	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"go.uber.org/zap"
 )
 
@@ -72,7 +72,7 @@ type Scanner struct {
 func newScanner(snapshot *KVSnapshot, startKey []byte, endKey []byte, batchSize int, reverse bool) (*Scanner, error) {
 	// It must be > 1. Otherwise scanner won't skipFirst.
 	if batchSize <= 1 {
-		batchSize = defaultScanBatchSize
+		batchSize = DefaultScanBatchSize
 	}
 	scanner := &Scanner{
 		snapshot:     snapshot,
@@ -230,6 +230,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 				NotFillCache:     s.snapshot.notFillCache,
 				IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
 				ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
+				RequestSource:    s.snapshot.GetRequestSource(),
 			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
@@ -250,6 +251,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			TaskId:           s.snapshot.mu.taskID,
 			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
 			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
+			RequestSource:    s.snapshot.GetRequestSource(),
 		})
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)

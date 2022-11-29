@@ -43,14 +43,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ab111404212/tikv/client-go/v2/internal/mockstore/mocktikv"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
 	"github.com/gogo/protobuf/proto"
-	"github.com/google/btree"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/kv"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -98,7 +97,7 @@ func (s *testRegionCacheSuite) checkCache(len int) {
 	ts := time.Now().Unix()
 	s.Equal(validRegions(s.cache.mu.regions, ts), len)
 	s.Equal(validRegionsSearchedByVersions(s.cache.mu.latestVersions, s.cache.mu.regions, ts), len)
-	s.Equal(validRegionsInBtree(s.cache.mu.sorted, ts), len)
+	s.Equal(s.cache.mu.sorted.ValidRegionsInBtree(ts), len)
 }
 
 func validRegionsSearchedByVersions(
@@ -123,18 +122,6 @@ func validRegions(regions map[RegionVerID]*Region, ts int64) (len int) {
 		}
 		len++
 	}
-	return
-}
-
-func validRegionsInBtree(t *btree.BTree, ts int64) (len int) {
-	t.Descend(func(item btree.Item) bool {
-		r := item.(*btreeItem).cachedRegion
-		if !r.checkRegionCacheTTL(ts) {
-			return true
-		}
-		len++
-		return true
-	})
 	return
 }
 
@@ -1548,4 +1535,76 @@ func (s *testRegionCacheSuite) TestLocateBucket() {
 		s.NotNil(b)
 		s.True(b.Contains(key))
 	}
+}
+
+func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
+	// Split at "b", "c", "d", "e"
+	regions := s.cluster.AllocIDs(4)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < 4; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < 4; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte{'b' + byte(i)}, peers[i+1], peers[i+1][0])
+	}
+
+	for c := 'a'; c <= 'e'; c++ {
+		loc, err := s.cache.LocateKey(s.bo, []byte{byte(c)})
+		s.Nil(err)
+		s.Equal(loc.Region.GetID(), regions[c-'a'])
+	}
+
+	// merge all except the last region together
+	for i := 1; i <= 3; i++ {
+		s.cluster.Merge(regions[0], regions[i])
+	}
+
+	// Now the region cache contains stale information
+	loc, err := s.cache.LocateKey(s.bo, []byte{'c'})
+	s.Nil(err)
+	s.NotEqual(loc.Region.GetID(), regions[0]) // This is incorrect, but is expected
+	loc, err = s.cache.LocateKey(s.bo, []byte{'e'})
+	s.Nil(err)
+	s.Equal(loc.Region.GetID(), regions[4]) // 'e' is not merged yet, so it's still correct
+
+	// If we insert the new region into the cache, the old intersecting regions will be removed.
+	// And the result will be correct.
+	region, err := s.cache.loadRegion(s.bo, []byte("c"), false)
+	s.Nil(err)
+	s.Equal(region.GetID(), regions[0])
+	s.cache.insertRegionToCache(region)
+	loc, err = s.cache.LocateKey(s.bo, []byte{'c'})
+	s.Nil(err)
+	s.Equal(loc.Region.GetID(), regions[0])
+	s.checkCache(2)
+
+	// Now, we merge the last region. This case tests against how we handle the empty end_key.
+	s.cluster.Merge(regions[0], regions[4])
+	region, err = s.cache.loadRegion(s.bo, []byte("e"), false)
+	s.Nil(err)
+	s.Equal(region.GetID(), regions[0])
+	s.cache.insertRegionToCache(region)
+	loc, err = s.cache.LocateKey(s.bo, []byte{'e'})
+	s.Nil(err)
+	s.Equal(loc.Region.GetID(), regions[0])
+	s.checkCache(1)
+}
+
+func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.NoError(err)
+	ctx, err := s.cache.GetTiKVRPCContext(retry.NewBackofferWithVars(context.Background(), 100, nil), loc.Region, kv.ReplicaReadLeader, 0)
+	s.NotNil(ctx)
+	s.NoError(err)
+	reqSend := NewRegionRequestSender(s.cache, nil)
+	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
+	s.Error(err)
+	s.False(shouldRetry)
+	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
+	s.Error(err)
+	s.False(shouldRetry)
 }

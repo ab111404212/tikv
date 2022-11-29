@@ -41,10 +41,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ab111404212/tikv/client-go/v2/oracle"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/atomic"
 )
 
 // Use global variables to prevent pdClients from creating duplicate timestamps.
@@ -62,6 +65,8 @@ type pdClient struct {
 	// in GC.
 	serviceSafePoints map[string]uint64
 	gcSafePointMu     sync.Mutex
+
+	externalTimestamp atomic.Uint64
 }
 
 // NewPDClient creates a mock pd.Client that uses local timestamp and meta data
@@ -113,6 +118,34 @@ func (c *pdClient) GetTSAsync(ctx context.Context) pd.TSFuture {
 
 func (c *pdClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TSFuture {
 	return c.GetTSAsync(ctx)
+}
+
+func (c *pdClient) SetExternalTimestamp(ctx context.Context, newTimestamp uint64) error {
+	p, l, err := c.GetTS(ctx)
+	if err != nil {
+		return err
+	}
+
+	currentTSO := oracle.ComposeTS(p, l)
+	if newTimestamp > currentTSO {
+		return errors.New("external timestamp is greater than global tso")
+	}
+	for {
+		externalTimestamp := c.externalTimestamp.Load()
+		if externalTimestamp > newTimestamp {
+			return errors.New("cannot decrease the external timestamp")
+		} else if externalTimestamp == newTimestamp {
+			return nil
+		}
+
+		if c.externalTimestamp.CompareAndSwap(externalTimestamp, newTimestamp) {
+			return nil
+		}
+	}
+}
+
+func (c *pdClient) GetExternalTimestamp(ctx context.Context) (uint64, error) {
+	return c.externalTimestamp.Load(), nil
 }
 
 type mockTSFuture struct {
@@ -238,6 +271,10 @@ func (c *pdClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.GetO
 	return &pdpb.GetOperatorResponse{Status: pdpb.OperatorStatus_SUCCESS}, nil
 }
 
+func (c *pdClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
+	return nil, nil
+}
+
 func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
 	return nil, nil
 }
@@ -246,4 +283,12 @@ func (c *pdClient) GetLeaderAddr() string { return "mockpd" }
 
 func (c *pdClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
 	return nil
+}
+
+func (c *pdClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *pdClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
 }

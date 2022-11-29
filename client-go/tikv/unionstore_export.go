@@ -34,7 +34,7 @@
 
 package tikv
 
-import "github.com/tikv/client-go/v2/internal/unionstore"
+import "github.com/ab111404212/tikv/client-go/v2/internal/unionstore"
 
 // Getter is the interface for the Get method.
 type Getter = unionstore.Getter
@@ -51,3 +51,6 @@ type Iterator = unionstore.Iterator
 // When discarding a newly added KV in `Cleanup`, the non-persistent flags will be cleared.
 // If there are persistent flags associated with key, we will keep this key in node without value.
 type MemDB = unionstore.MemDB
+
+// MemDBCheckpoint is the checkpoint of memory DB.
+type MemDBCheckpoint = unionstore.MemDBCheckpoint

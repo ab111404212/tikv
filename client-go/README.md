@@ -3,11 +3,11 @@
 TiKV Go Client provides support for interacting with the [TiKV](https://github.com/tikv/tikv) server in the form of a Go library.
 
 ![Stability Active](https://img.shields.io/badge/Stability-Active-yellow)
-[![Go Reference](https://pkg.go.dev/badge/github.com/tikv/client-go/v2.svg)](https://pkg.go.dev/github.com/tikv/client-go/v2)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ab111404212/tikv/client-go/v2.svg)](https://pkg.go.dev/github.com/ab111404212/tikv/client-go/v2)
 
-[![Unit Test](https://github.com/tikv/client-go/actions/workflows/test.yml/badge.svg)](https://github.com/tikv/client-go/actions/workflows/test.yml)
-[![Integration Test](https://github.com/tikv/client-go/actions/workflows/integration.yml/badge.svg)](https://github.com/tikv/client-go/actions/workflows/integration.yml)
-[![Compatibility Test](https://github.com/tikv/client-go/actions/workflows/compatibility.yml/badge.svg)](https://github.com/tikv/client-go/actions/workflows/compatibility.yml)
+[![Unit Test](https://github.com/ab111404212/tikv/client-go/actions/workflows/test.yml/badge.svg)](https://github.com/ab111404212/tikv/client-go/actions/workflows/test.yml)
+[![Integration Test](https://github.com/ab111404212/tikv/client-go/actions/workflows/integration.yml/badge.svg)](https://github.com/ab111404212/tikv/client-go/actions/workflows/integration.yml)
+[![Compatibility Test](https://github.com/ab111404212/tikv/client-go/actions/workflows/compatibility.yml/badge.svg)](https://github.com/ab111404212/tikv/client-go/actions/workflows/compatibility.yml)
 
 ## Package versions
 
@@ -21,10 +21,10 @@ There are 2 major versions of the `client-go` package.
 
 ```bash
   # valid versions be like @latest, @e5f932ae270887550b0cd221343dbd6b870b6c8f, @v2.0.0, @v2.0.1...
-  go get github.com/tikv/client-go/v2@COMMIT_HASH_OR_TAG_VERSION
+  go get github.com/ab111404212/tikv/client-go/v2@COMMIT_HASH_OR_TAG_VERSION
 ```
 
-Explanation of related concepts and sample code can be found in the [Client-Go Wiki](https://github.com/tikv/client-go/wiki). There are also executable examples in [examples directory](https://github.com/tikv/client-go/tree/master/examples).
+Explanation of related concepts and sample code can be found in the [Client-Go Wiki](https://github.com/ab111404212/tikv/client-go/wiki). There are also executable examples in [examples directory](https://github.com/ab111404212/tikv/client-go/tree/master/examples).
 
 ## Contributing to client-go
 
@@ -34,7 +34,7 @@ Pull Requests and issues are welcomed. Please check [CONTRIBUTING.md](./CONTRIBU
 
 ### Running Tests
 
-Note: All the following tests are included in the [CI](https://github.com/tikv/client-go/actions) and you can submit a Pull Request directly to hand over the work.
+Note: All the following tests are included in the [CI](https://github.com/ab111404212/tikv/client-go/actions) and you can submit a Pull Request directly to hand over the work.
 
 To run unit tests, use following command
 
@@ -66,7 +66,7 @@ It is a common task to update client-go and then test it with TiDB.
 If you only need to test locally, you can directly use the modified client-go on the same host by replacing:
 
 ```bash
-go mod edit -replace=github.com/tikv/client-go/v2=/path/to/client-go
+go mod edit -replace=github.com/ab111404212/tikv/client-go/v2=/path/to/client-go
 ```
 
 If you want to push your TiDB code to GitHub for running CI or for code review, you need to change the client-go used by TiDB to your developing branch using the following steps:
@@ -76,10 +76,10 @@ go get -d github.com/GITHUB_USERNAME/client-go/v2@DEV_BRANCH
 # Output:
 # go get: github.com/GITHUB_USERNAME/client-go/v2@none updating to
 #         github.com/GITHUB_USERNAME/client-go/v2@v2.0.0-XXXXXXXXXXXXXX-XXXXXXXXXXXX: parsing go.mod:
-#         module declares its path as: github.com/tikv/client-go/v2
+#         module declares its path as: github.com/ab111404212/tikv/client-go/v2
 #                 but was required as: github.com/GITHUB_USERNAME/client-go/v2
-go mod edit -replace=github.com/tikv/client-go/v2=github.com/GITHUB_USERNAME/client-go/v2@v2.0.0-XXXXXXXXXXXXXX-XXXXXXXXXXXX
-go mod download github.com/tikv/client-go/v2
+go mod edit -replace=github.com/ab111404212/tikv/client-go/v2=github.com/GITHUB_USERNAME/client-go/v2@v2.0.0-XXXXXXXXXXXXXX-XXXXXXXXXXXX
+go mod download github.com/ab111404212/tikv/client-go/v2
 ```
 
 ## Used By
@@ -91,6 +91,7 @@ go mod download github.com/tikv/client-go/v2
 - [TiCDC](https://github.com/pingcap/ticdc): Change data capture for TiDB
 - [go-ycsb](https://github.com/pingcap/go-ycsb): A Go port of Yahoo! Cloud Serving Benchmark (YCSB)
 - [JuiceFS](https://github.com/juicedata/juicefs): JuiceFS is a distributed POSIX file system built on top of Redis and S3
+- [tcli](https://github.com/c4pt0r/tcli): A CLI tool for TiKV, for human being :)
 
 ## License
 

@@ -41,19 +41,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/internal/client"
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
+	"github.com/ab111404212/tikv/client-go/v2/internal/logutil"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
+	"github.com/ab111404212/tikv/client-go/v2/metrics"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
+	"github.com/ab111404212/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/ab111404212/tikv/client-go/v2/util"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/txnkv/txnlock"
-	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -86,6 +86,7 @@ func (actionPessimisticRollback) tiKVTxnRegionsNumHistogram() prometheus.Observe
 func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
+	c.txn.GetMemBuffer().RLock()
 	for i := 0; i < m.Len(); i++ {
 		mut := &kvrpcpb.Mutation{
 			Op:  kvrpcpb.Op_PessimisticLock,
@@ -96,18 +97,25 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		}
 		mutations[i] = mut
 	}
+	c.txn.GetMemBuffer().RUnlock()
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{
-		Mutations:      mutations,
-		PrimaryLock:    c.primary(),
-		StartVersion:   c.startTS,
-		ForUpdateTs:    c.forUpdateTS,
-		IsFirstLock:    c.isFirstLock,
-		WaitTimeout:    action.LockWaitTime(),
-		ReturnValues:   action.ReturnValues,
-		CheckExistence: action.CheckExistence,
-		MinCommitTs:    c.forUpdateTS + 1,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: action.LockCtx.ResourceGroupTag,
-		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+		Mutations:        mutations,
+		PrimaryLock:      c.primary(),
+		StartVersion:     c.startTS,
+		ForUpdateTs:      c.forUpdateTS,
+		IsFirstLock:      c.isFirstLock,
+		WaitTimeout:      action.LockWaitTime(),
+		ReturnValues:     action.ReturnValues,
+		CheckExistence:   action.CheckExistence,
+		MinCommitTs:      c.forUpdateTS + 1,
+		LockOnlyIfExists: action.LockOnlyIfExists,
+	}, kvrpcpb.Context{
+		Priority:               c.priority,
+		SyncLog:                c.syncLog,
+		ResourceGroupTag:       action.LockCtx.ResourceGroupTag,
+		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
+		RequestSource:          c.txn.GetRequestSource(),
+	})
 	if action.LockCtx.ResourceGroupTag == nil && action.LockCtx.ResourceGroupTagger != nil {
 		req.ResourceGroupTag = action.LockCtx.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))
 	}
@@ -139,10 +147,12 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			time.Sleep(300 * time.Millisecond)
 			return errors.WithStack(&tikverr.ErrWriteConflict{WriteConflict: nil})
 		}
+		sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 		startTime := time.Now()
-		resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		reqDuration := time.Since(startTime)
 		if action.LockCtx.Stats != nil {
-			atomic.AddInt64(&action.LockCtx.Stats.LockRPCTime, int64(time.Since(startTime)))
+			atomic.AddInt64(&action.LockCtx.Stats.LockRPCTime, int64(reqDuration))
 			atomic.AddInt64(&action.LockCtx.Stats.LockRPCCount, 1)
 		}
 		if err != nil {
@@ -178,6 +188,10 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		lockResp := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
 		keyErrs := lockResp.GetErrors()
 		if len(keyErrs) == 0 {
+			if action.LockCtx.Stats != nil {
+				action.LockCtx.Stats.MergeReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+			}
+
 			if batch.isPrimary {
 				// After locking the primary key, we should protect the primary lock from expiring
 				// now in case locking the remaining keys take a long time.
@@ -226,7 +240,6 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		}
 		// Because we already waited on tikv, no need to Backoff here.
 		// tikv default will wait 3s(also the maximum wait value) when lock error occurs
-		startTime = time.Now()
 		if resolvingRecordToken == nil {
 			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
 			resolvingRecordToken = &token
@@ -234,17 +247,21 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		} else {
 			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
 		}
-		msBeforeTxnExpired, err := c.store.GetLockResolver().ResolveLocks(bo, 0, locks)
-		if err != nil {
-			return err
+		resolveLockOpts := txnlock.ResolveLocksOptions{
+			CallerStartTS: 0,
+			Locks:         locks,
 		}
 		if action.LockCtx.Stats != nil {
-			atomic.AddInt64(&action.LockCtx.Stats.ResolveLockTime, int64(time.Since(startTime)))
+			resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
+		}
+		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
+		if err != nil {
+			return err
 		}
 
 		// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 		// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
-		if msBeforeTxnExpired > 0 {
+		if resolveLockRes.TTL > 0 {
 			if action.LockWaitTime() == kv.LockNoWait {
 				return errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
 			} else if action.LockWaitTime() == kv.LockAlwaysWait {
@@ -280,6 +297,7 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 		ForUpdateTs:  c.forUpdateTS,
 		Keys:         batch.mutations.GetKeys(),
 	})
+	req.RequestSource = util.RequestSourceFromCtx(bo.GetCtx())
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {

@@ -37,8 +37,8 @@ package unionstore
 import (
 	"context"
 
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/kv"
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
+	"github.com/ab111404212/tikv/client-go/v2/kv"
 )
 
 // Iterator is the interface for a iterator on KV store.

@@ -38,8 +38,8 @@ import (
 	"context"
 	"testing"
 
+	tikverr "github.com/ab111404212/tikv/client-go/v2/error"
 	"github.com/stretchr/testify/assert"
-	tikverr "github.com/tikv/client-go/v2/error"
 )
 
 func TestUnionStoreGetSet(t *testing.T) {

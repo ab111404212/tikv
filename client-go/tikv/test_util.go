@@ -35,8 +35,8 @@
 package tikv
 
 import (
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
 	"github.com/google/uuid"
-	"github.com/tikv/client-go/v2/internal/locate"
 	pd "github.com/tikv/pd/client"
 )
 

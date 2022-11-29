@@ -15,10 +15,10 @@
 package txnsnapshot
 
 import (
+	"github.com/ab111404212/tikv/client-go/v2/internal/locate"
+	"github.com/ab111404212/tikv/client-go/v2/internal/retry"
+	"github.com/ab111404212/tikv/client-go/v2/tikvrpc"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 // SnapshotProbe exposes some snapshot utilities for testing purpose.
@@ -63,7 +63,7 @@ type ConfigProbe struct{}
 
 // GetScanBatchSize returns the batch size to scan ranges.
 func (c ConfigProbe) GetScanBatchSize() int {
-	return defaultScanBatchSize
+	return DefaultScanBatchSize
 }
 
 // GetGetMaxBackoff returns the max sleep for get command.
